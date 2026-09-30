@@ -1,159 +1,141 @@
+import { useMemo } from "react";
 import "./styles.css";
-
-const project = {
-  "id": "hxwl-09",
-  "port": 5109,
-  "title": "半导体洁净室巡检",
-  "subtitle": "洁净等级阈值、粒子计数与异常处理看板",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0f766e",
-    "#2563eb",
-    "#e11d48"
-  ],
-  "domain": "洁净室巡检",
-  "users": [
-    "巡检员",
-    "厂务工程师",
-    "班组长"
-  ],
-  "metrics": [
-    "粒子异常",
-    "压差异常",
-    "温湿度偏移",
-    "待处理"
-  ],
-  "filters": [
-    "ISO 5",
-    "ISO 6",
-    "ISO 7",
-    "黄光区"
-  ],
-  "fields": [
-    "房间编号",
-    "洁净等级",
-    "粒子计数",
-    "温湿度",
-    "压差",
-    "设备状态",
-    "处理备注"
-  ],
-  "records": [
-    [
-      "CR-1201",
-      "ISO 5",
-      "异常",
-      "0.5um粒子超限，已通知厂务"
-    ],
-    [
-      "CR-2107",
-      "ISO 6",
-      "稳定",
-      "压差15Pa，温湿度正常"
-    ],
-    [
-      "Y-0302",
-      "黄光区",
-      "关注",
-      "湿度接近上限"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+import { BatchConsole } from "./components/BatchConsole";
+import { MigrationPanel } from "./components/MigrationPanel";
+import { RecordCard } from "./components/RecordCard";
+import { ThresholdBar } from "./components/ThresholdBar";
+import { Panel } from "./components/ui";
+import { useMergeStore, type ActionLog } from "./state/store";
+import { DEMO_DATE } from "./domain/demo";
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const store = useMergeStore();
+  const { state } = store;
+
+  const records = useMemo(
+    () => Object.values(state.records).sort((a, b) => b.updatedAt - a.updatedAt),
+    [state.records]
+  );
+
+  const stats = useMemo(() => {
+    const anomalies = Object.values(state.anomalies);
+    const open = anomalies.filter((a) => a.status === "open").length;
+    const reopened = anomalies.filter((a) => a.status === "reopened").length;
+    const conflicts = records.reduce(
+      (n, r) =>
+        n +
+        (Object.values(r.fields) as { candidates: unknown[] }[]).filter(
+          (f) => f.candidates.length >= 2
+        ).length,
+      0
+    );
+    const reconfirms = records.filter((r) => r.needsReconfirm).length;
+    return { open, reopened, conflicts, reconfirms, failed: Object.keys(state.failedBatches).length };
+  }, [state.anomalies, state.records, state.failedBatches, records]);
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-09 · 离线巡检合并中心 · 演示日期 {DEMO_DATE}</p>
+          <h1>半导体洁净室巡检 · 两班交接合并</h1>
+          <p className="subtitle">
+            同一房间同一班次只保留一条巡检记录：不同字段各自保留来源班组；同一字段两班都改过则
+            <b>停在待确认</b>并列出两版。巡检记录与异常处理接线：已处置异常不被旧批次改回待处理，
+            新计数再次超限自动重开并保留原处置；阈值版本升级后旧判定重新确认；批次失败可单独重试、
+            已接收批次幂等去重；旧浏览器数据补上班次与阈值版本后历史处置仍可查。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>当前阈值版本</span>
+          <strong>{state.thresholds[state.currentThresholdVersion]?.label}</strong>
+          <span>接收台账 {state.acceptedBatchIds.length} 批 · 失败队列 {stats.failed} 批</span>
+          <button onClick={store.resetDemo}>重置演示数据</button>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
-        ))}
+        <MetricCard label="待处理异常" value={stats.open} tone="danger" />
+        <MetricCard label="重开（保留原处置）" value={stats.reopened} tone="warn" />
+        <MetricCard label="字段待确认冲突" value={stats.conflicts} tone="warn" />
+        <MetricCard label="阈值升级待复核" value={stats.reconfirms} tone="ok" />
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+      <section className="workspace two-col">
+        <BatchConsole
+          state={state}
+          ingest={store.ingest}
+          retryFailed={store.retryFailed}
+        />
+        <ActionFeed logs={store.logs} />
+      </section>
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
+      <section className="workspace two-col">
+        <ThresholdBar state={state} onActivateV2={store.activateV2} />
+        <MigrationPanel onMigrate={store.runMigration} />
       </section>
 
       <section className="records panel">
         <div className="section-heading">
           <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
+            <p className="eyebrow">合并后的唯一记录</p>
+            <h2>巡检记录 × {records.length}（房间 + 日期 + 班次 唯一）</h2>
           </div>
-          <button>导出摘要</button>
         </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
+        <div className="record-tiles">
+          {records.map((record) => (
+            <RecordCard
+              key={record.id}
+              state={state}
+              record={record}
+              anomaly={
+                state.anomalyIndex[record.id]
+                  ? state.anomalies[state.anomalyIndex[record.id]]
+                  : null
+              }
+              decideConflict={store.decideConflict}
+              reconfirm={store.reconfirm}
+            />
           ))}
         </div>
       </section>
     </main>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "ok" | "warn" | "danger";
+}) {
+  return (
+    <article className="metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <i className={`metric-bar metric-${tone}`} />
+    </article>
+  );
+}
+
+function ActionFeed({ logs }: { logs: ActionLog[] }) {
+  return (
+    <Panel title="合并动作日志" hint="实时反馈">
+      {logs.length === 0 ? (
+        <p className="muted-text">接入批次、裁决冲突或升级阈值后，此处显示引擎处理结果。</p>
+      ) : (
+        <ul className="log-list">
+          {logs.map((l, i) => (
+            <li key={i} className={`log-item log-${l.tone}`}>
+              {l.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
