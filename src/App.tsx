@@ -1,160 +1,129 @@
 import "./styles.css";
+import { useDomainStore } from "./domain/store";
+import {
+  listExceptions,
+  listRecords,
+  metrics,
+  pendingConflicts,
+} from "./domain/selectors";
+import { ConflictPanel } from "./components/ConflictPanel";
+import { ExceptionCard } from "./components/ExceptionCard";
+import { RecordCard } from "./components/RecordCard";
+import { LedgerPanel } from "./components/LedgerPanel";
+import { AuditLog, IngestPanel } from "./components/IngestPanel";
 
-const project = {
-  "id": "hxwl-09",
-  "port": 5109,
-  "title": "半导体洁净室巡检",
-  "subtitle": "洁净等级阈值、粒子计数与异常处理看板",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0f766e",
-    "#2563eb",
-    "#e11d48"
-  ],
-  "domain": "洁净室巡检",
-  "users": [
-    "巡检员",
-    "厂务工程师",
-    "班组长"
-  ],
-  "metrics": [
-    "粒子异常",
-    "压差异常",
-    "温湿度偏移",
-    "待处理"
-  ],
-  "filters": [
-    "ISO 5",
-    "ISO 6",
-    "ISO 7",
-    "黄光区"
-  ],
-  "fields": [
-    "房间编号",
-    "洁净等级",
-    "粒子计数",
-    "温湿度",
-    "压差",
-    "设备状态",
-    "处理备注"
-  ],
-  "records": [
-    [
-      "CR-1201",
-      "ISO 5",
-      "异常",
-      "0.5um粒子超限，已通知厂务"
-    ],
-    [
-      "CR-2107",
-      "ISO 6",
-      "稳定",
-      "压差15Pa，温湿度正常"
-    ],
-    [
-      "Y-0302",
-      "黄光区",
-      "关注",
-      "湿度接近上限"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
+function MetricCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
     <article className="metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
+      <i className={tone} />
     </article>
   );
 }
 
-function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+export default function App() {
+  const store = useDomainStore();
+  const { state, outbox } = store;
+  const m = metrics(state);
+  const records = listRecords(state);
+  const conflicts = pendingConflicts(state);
+  const exceptions = listExceptions(state);
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-09 · 交接班离线合并</p>
+          <h1>半导体洁净室巡检</h1>
+          <p className="subtitle">
+            同一房间同一班次只留一条记录：字段级合并、各自保留来源；同字段两班同改进待确认。
+            已处置异常不被旧批次回退，新计数超限自动重开并保留处置；阈值升级旧判定重新确认；
+            失败批次单独重试，已接收批次不重复带入，旧浏览器数据补齐班次与阈值版本后可迁移查询。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>规则开关</span>
+          <strong>当前阈值版本：{state.currentThresholdVersion}</strong>
+          <div className="row-actions">
+            <button className="primary" onClick={store.runDemo}>
+              载入交接演示
+            </button>
+            <button onClick={store.reset}>清空重建</button>
+          </div>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
-        ))}
+        <MetricCard label="巡检记录（房间+班次唯一）" value={m.rooms} tone="status-ok" />
+        <MetricCard label="待确认字段冲突" value={m.conflicts} tone="status-watch" />
+        <MetricCard label="待处理异常" value={m.openExceptions} tone="status-danger" />
+        <MetricCard label="阈值重确认 / 失败批次" value={m.reconfirm + m.failedBatches} tone="status-watch" />
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+      <ConflictPanel
+        items={conflicts}
+        onChoose={(recordId, conflictId, batchId) =>
+          store.actions.chooseConflictVersion(recordId, conflictId, batchId, "班组长")
+        }
+      />
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="records panel">
+      <section className="panel" style={{ marginBottom: 20 }}>
         <div className="section-heading">
           <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
+            <p>巡检记录与异常处理已接起来</p>
+            <h2>异常时间线（处置永久保留，重开可追溯）</h2>
           </div>
-          <button>导出摘要</button>
         </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
+        <div className="exception-grid">
+          {exceptions.length === 0 && <p className="empty">暂无异常。粒子计数超过当前阈值版本时自动打开。</p>}
+          {exceptions.map((exp) => (
+            <ExceptionCard
+              key={exp.id}
+              exp={exp}
+              onResolve={(id, note) => store.actions.closeException(id, note, "厂务工程师")}
+              onReconfirm={(id, exceeded) => store.actions.reconfirm(id, exceeded, "班组长")}
+            />
           ))}
         </div>
       </section>
+
+      <IngestPanel
+        state={state}
+        onReceive={store.receive}
+        failNext={store.failNext}
+        onToggleFail={store.setFailNext}
+        onImportLegacy={store.actions.importLegacy}
+        onUpgrade={() =>
+          store.actions.upgrade({
+            version: "v2026-03",
+            effectiveAt: Date.now(),
+            note: "制程收紧",
+            limits: { "ISO 5": 3000, "ISO 6": 30000, "ISO 7": 352000, 黄光区: 300000 },
+          })
+        }
+      />
+
+      <section className="panel" style={{ marginTop: 20 }}>
+        <div className="section-heading">
+          <div>
+            <p>字段级合并结果</p>
+            <h2>记录明细（每格标注来源批次/终端/人/阈值版本）</h2>
+          </div>
+        </div>
+        <div className="record-grid">
+          {records.length === 0 && <p className="empty">还没有记录，点「载入交接演示」查看完整场景。</p>}
+          {records.map((rec) => (
+            <RecordCard key={rec.id} state={state} record={rec} />
+          ))}
+        </div>
+      </section>
+
+      <div style={{ height: 20 }} />
+      <LedgerPanel ledger={state.ledger} outbox={outbox} onRetry={store.retry} onDismiss={store.removeFromOutbox} />
+
+      <div style={{ height: 20 }} />
+      <AuditLog events={state.audit} />
     </main>
   );
 }
-
-export default App;
